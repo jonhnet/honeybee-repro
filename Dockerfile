@@ -25,38 +25,53 @@ RUN make && sudo make install
 WORKDIR /home/ubuntu
 RUN rm -rf pgvector
 
+# Setup Python Environment
 RUN python3 -m venv venv
+# Configure all future RUN commands to happen inside the venv
+RUN echo 'source /home/ubuntu/venv/bin/activate' >> /home/ubuntu/.profile
+SHELL ["/bin/bash", "-l", "-c"]
+RUN pip install -r requirements.txt
 
-COPY script1.sh /home/ubuntu/
-RUN bash script1.sh
+# Setup embedding model
+RUN python -m spacy download en_core_web_md
 
-COPY script2.sh /home/ubuntu/
-RUN bash script2.sh
+# Download Dataset
+# This thing is sloooow because it fetches 39GB of dataset
+RUN mkdir dataset
+RUN cd dataset && git lfs install && git clone https://huggingface.co/datasets/Cohere/wikipedia-22-12
 
-# This step fetches 39GB of dataset from huggingface.co; let's try to keep
-# changes *after* this point in the Dockerfile :vD
-# (Or maybe we should move this step up to the beginning.)
-# Getting here is about 11 minutes on my machine.
-COPY script3.sh /home/ubuntu/
-RUN bash script3.sh
-
+# (not in README) Set up database user & perms
+RUN sudo service postgresql start && sudo -u postgres psql -c "CREATE USER rbac_user PASSWORD '123' SUPERUSER CREATEDB CREATEROLE;" && sudo -u postgres psql -c "CREATE DATABASE rbacdatabase_treebase;"
 COPY config.json /home/ubuntu/
 COPY dotpgpass /home/ubuntu/.pgpass
 
-COPY script4.sh /home/ubuntu/
-RUN bash script4.sh
+# Note that, henceforth, we have to prepend 'startsql' to each RUN, since
+# services don't survive in docker images, only data.
+RUN echo 'sudo service postgresql start' >> startsql
+RUN chmod 755 startsql
 
-COPY script5.sh /home/ubuntu/
-RUN bash script5.sh
-
-COPY script6.sh /home/ubuntu/
-RUN bash script6.sh
-
-COPY script7.sh /home/ubuntu/
-RUN bash script7.sh
-
-COPY script8.sh /home/ubuntu/
-RUN bash script8.sh
-
-COPY script9.sh /home/ubuntu/
-RUN bash script9.sh
+# Prepare Data
+RUN ./startsql && (cd basic_benchmark && python3 common_prepare_pipeline.py)
+#  
+#  RUN ./startsql && (cd controller && python3 initialize_main_tables.py)
+#  
+#  # Generate Permission
+#  RUN ./startsql && (cd services/rbac_generator && python3 store_tree_based_rbac_generate_data.py)
+#  
+#  # Initilize partition and prepare for queries
+#  RUN ./startsql && (cd basic_benchmark && python3 initialize_role_partition_tables.py)
+#  # skipping "(optional)" step at author's suggestion
+#  # generate queries
+#  RUN ./startsql && (cd basic_benchmark && python3 generate_queries.py --num_queries 1000 --topk 10 --num_threads 4)
+#  
+#  # Initilize dynamic partition
+#  # README: "if needed, delete parameter_hnsw.json from hnsw directory to regenerate parameters"
+#  # TODO(hongbin): I think this is where we got stuck on curve_fit, and you
+#  # supplied a parameter_hnsw.json to skip over it. But we should get this
+#  # working so that the source code is documentation, not a magical parameter
+#  # file of undocumented origin.)
+#  RUN ./startsql && (cd controller/dynamic_partition/hnsw; python3 AnonySys_dynamic_partition.py --storage 2.0 --recall 0.95)
+#  
+#  # Run(HNSW index)
+#  # NOTE: these experiment runs emit .json files in the top directory with outputs.
+#  RUN ./startsql && python test_all.py --algorithm AnonySys --efs 20 && python test_all.py --algorithm RLS --efs 20
