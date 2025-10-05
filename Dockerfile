@@ -47,13 +47,13 @@ COPY dotpgpass /home/ubuntu/.pgpass
 
 # Note that, henceforth, we have to prepend 'startsql' to each RUN, since
 # services don't survive in docker images, only data.
+# stopsql shuts down gracefully to avoid DB recovery on next start
 RUN echo 'sudo service postgresql start' >> startsql
-RUN chmod 755 startsql
+RUN echo 'sudo service postgresql stop && sync' >> stopsql
+RUN chmod 755 startsql stopsql
 
 # Prepare Data
-RUN ./startsql && (cd basic_benchmark && python3 common_prepare_pipeline.py)
-
-COPY initialize_main_tables.patch /home/ubuntu/
+RUN ./startsql && (cd basic_benchmark && python3 common_prepare_pipeline.py) && ./stopsql
 
 # I've broken this file up into lots of discrete steps to make it easier
 # to diagnose/develop individual steps while enjoying the docker caching
@@ -62,19 +62,17 @@ COPY initialize_main_tables.patch /home/ubuntu/
 
 # TODO(hongbin): note the patch below. I presume you want to just update
 # the archive and remove the patch file & this line.
+COPY initialize_main_tables.patch /home/ubuntu/
 RUN patch -p 1 < initialize_main_tables.patch
-RUN ./startsql && (cd controller && python3 initialize_main_tables.py)
+RUN ./startsql && (cd controller && python3 initialize_main_tables.py) && ./stopsql
 
-# Should be stopping sql gracefully to avoid recovery on next start
-# TODO(jonh): move up in script; append to other lines
-RUN echo 'sudo service postgresql stop && sync' >> stopsql
-RUN chmod 755 stopsql
 # Generate Permission
 RUN ./startsql && (cd services/rbac_generator && python3 store_tree_based_rbac_generate_data.py) && ./stopsql
 
 # Initilize partition and prepare for queries
 RUN ./startsql && (cd basic_benchmark && python3 initialize_role_partition_tables.py) && ./stopsql
 # skipping "(optional)" step at author's suggestion
+
 # generate queries
 # TODO(hongbin): I droppen num-threads from 4 to 2 because I was getting OOM
 # otherwise. I suspect this is a problem with how docker is provisioning
